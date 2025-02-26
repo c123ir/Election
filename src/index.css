@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: 'Yekan';
+  src: url('https://v1.fontapi.ir/css/Yekan');
+  font-display: swap;
+}
+
+:root {
+  direction: rtl;
+}
+
+body {
+  font-family: 'Yekan', Tahoma, sans-serif;
+}
+
+/* Dark mode styles */
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  @apply bg-dark-bg text-dark-text-primary;
+}
+
+/* تعریف کلاس‌های کاربردی برای دارک مود */
+@layer components {
+  .card {
+    @apply bg-white dark:bg-dark-card border border-gray-200 dark:border-dark-border rounded-lg shadow-sm;
+  }
+  
+  .input {
+    @apply bg-white dark:bg-dark-card border border-gray-300 dark:border-dark-border rounded-md 
+    focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-400 focus:border-transparent
+    text-gray-900 dark:text-dark-text-primary placeholder-gray-500 dark:placeholder-dark-text-secondary;
+  }
+  
+  .button-primary {
+    @apply bg-primary-500 hover:bg-primary-600 dark:bg-primary-600 dark:hover:bg-primary-700 
+    text-white rounded-md transition-colors;
+  }
+  
+  .button-secondary {
+    @apply bg-gray-100 hover:bg-gray-200 dark:bg-dark-hover dark:hover:bg-dark-border
+    text-gray-700 dark:text-dark-text-primary rounded-md transition-colors;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100 dark:bg-dark-card;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-400 dark:bg-gray-600 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500 dark:bg-gray-500;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Mobile optimizations */
+@media (max-width: 640px) {
+  .container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
+/* Print styles */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  /* تنظیمات چاپ برای A4 */
+  @page {
+    size: A4;
+    margin: 2cm;
+  }
+
+  /* بهینه‌سازی فونت‌ها برای چاپ */
+  h1 {
+    font-size: 24pt !important;
+  }
+
+  h2 {
+    font-size: 20pt !important;
+  }
+
+  h3 {
+    font-size: 16pt !important;
+  }
+
+  p, li {
+    font-size: 12pt !important;
+    line-height: 1.5 !important;
+  }
+
+  /* حذف افکت‌های اضافی در هنگام چاپ */
+  * {
+    text-shadow: none !important;
+    box-shadow: none !important;
+    transition: none !important;
+  }
+
+  /* تنظیم رنگ‌ها برای چاپ بهتر */
+  .bg-gradient-to-br {
+    background: white !important;
+  }
+
+  .text-gray-500 {
+    color: #666 !important;
+  }
+
+  .border {
+    border-color: #ddd !important;
+  }
+
+  /* نمایش لینک‌ها در چاپ */
+  a[href]:after {
+    content: " (" attr(href) ")";
+    font-size: 10pt;
+    font-style: italic;
+  }
+
+  /* تنظیم عرض محتوا برای چاپ */
+  .container {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
