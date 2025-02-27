@@ -4,7 +4,7 @@
  * این ماژول توابع مربوط به مدیریت کاربران را پیاده‌سازی می‌کند
  * شامل دریافت، ایجاد، بروزرسانی و حذف کاربران
  */
-import { supabase } from '../supabase';
+import { query, transaction } from '../mysql';
 import { User } from '../../types';
 
 /**
@@ -22,24 +22,27 @@ import { User } from '../../types';
  */
 export async function getUsers(options: { is_approved?: boolean, role?: string } = {}): Promise<User[]> {
   try {
-    let query = supabase.from('users').select('*');
+    let sql = 'SELECT * FROM users WHERE 1=1';
+    const params: any[] = [];
     
     if (options.is_approved !== undefined) {
-      query = query.eq('is_approved', options.is_approved);
+      sql += ' AND is_approved = ?';
+      params.push(options.is_approved ? 1 : 0);
     }
     
     if (options.role) {
-      query = query.eq('role', options.role);
+      sql += ' AND role = ?';
+      params.push(options.role);
     }
     
-    const { data, error } = await query;
+    const results = await query(sql, params);
     
-    if (error) {
-      console.error('خطا در دریافت کاربران:', error);
-      return [];
-    }
-    
-    return data as User[];
+    // تبدیل فیلدهای بولین
+    return results.map((user: any) => ({
+      ...user,
+      is_approved: user.is_approved === 1,
+      privacy_settings: user.privacy_settings ? JSON.parse(user.privacy_settings) : null
+    }));
   } catch (error) {
     console.error('خطا در دریافت کاربران:', error);
     return [];
@@ -58,18 +61,20 @@ export async function getUsers(options: { is_approved?: boolean, role?: string }
  */
 export async function getUser(userId: string): Promise<User | null> {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
+    const results = await query('SELECT * FROM users WHERE id = ?', [userId]);
     
-    if (error) {
-      console.error('خطا در دریافت اطلاعات کاربر:', error);
+    if (results.length === 0) {
       return null;
     }
     
-    return data as User;
+    const user = results[0];
+    
+    // تبدیل فیلدهای بولین و JSON
+    return {
+      ...user,
+      is_approved: user.is_approved === 1,
+      privacy_settings: user.privacy_settings ? JSON.parse(user.privacy_settings) : null
+    };
   } catch (error) {
     console.error('خطا در دریافت اطلاعات کاربر:', error);
     return null;
@@ -89,15 +94,56 @@ export async function getUser(userId: string): Promise<User | null> {
  */
 export async function updateUser(userId: string, userData: Partial<User>): Promise<boolean> {
   try {
-    const { error } = await supabase
-      .from('users')
-      .update(userData)
-      .eq('id', userId);
+    // ساخت کوئری بروزرسانی
+    const fields: string[] = [];
+    const values: any[] = [];
     
-    if (error) {
-      console.error('خطا در بروزرسانی اطلاعات کاربر:', error);
-      return false;
+    // بررسی و اضافه کردن فیلدها
+    if (userData.full_name !== undefined) {
+      fields.push('full_name = ?');
+      values.push(userData.full_name);
     }
+    
+    if (userData.phone !== undefined) {
+      fields.push('phone = ?');
+      values.push(userData.phone);
+    }
+    
+    if (userData.role !== undefined) {
+      fields.push('role = ?');
+      values.push(userData.role);
+    }
+    
+    if (userData.business_category !== undefined) {
+      fields.push('business_category = ?');
+      values.push(userData.business_category);
+    }
+    
+    if (userData.business_name !== undefined) {
+      fields.push('business_name = ?');
+      values.push(userData.business_name);
+    }
+    
+    if (userData.is_approved !== undefined) {
+      fields.push('is_approved = ?');
+      values.push(userData.is_approved ? 1 : 0);
+    }
+    
+    if (userData.privacy_settings !== undefined) {
+      fields.push('privacy_settings = ?');
+      values.push(JSON.stringify(userData.privacy_settings));
+    }
+    
+    // اگر فیلدی برای بروزرسانی وجود ندارد
+    if (fields.length === 0) {
+      return true;
+    }
+    
+    // اضافه کردن شناسه کاربر به پارامترها
+    values.push(userId);
+    
+    // اجرای کوئری بروزرسانی
+    await query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
     
     return true;
   } catch (error) {
@@ -118,15 +164,7 @@ export async function updateUser(userId: string, userData: Partial<User>): Promi
  */
 export async function approveUser(userId: string): Promise<boolean> {
   try {
-    const { data, error } = await supabase.rpc('approve_user', {
-      user_id: userId
-    });
-    
-    if (error) {
-      console.error('خطا در تأیید کاربر:', error);
-      return false;
-    }
-    
+    await query('UPDATE users SET is_approved = 1 WHERE id = ?', [userId]);
     return true;
   } catch (error) {
     console.error('خطا در تأیید کاربر:', error);
@@ -156,19 +194,32 @@ export async function registerUser(userData: {
   business_name: string;
 }): Promise<string | null> {
   try {
-    const { data, error } = await supabase.rpc('register_user', {
-      phone_number: userData.phone,
-      name: userData.full_name,
-      business_cat: userData.business_category,
-      business_name: userData.business_name
-    });
+    // بررسی وجود کاربر با این شماره موبایل
+    const existingUsers = await query('SELECT id FROM users WHERE phone = ?', [userData.phone]);
     
-    if (error) {
-      console.error('خطا در ثبت‌نام کاربر:', error);
-      return null;
+    if (existingUsers.length > 0) {
+      throw new Error('کاربر با این شماره موبایل قبلاً ثبت شده است');
     }
     
-    return data;
+    // ایجاد کاربر جدید
+    const result = await query(
+      'INSERT INTO users (phone, full_name, role, business_category, business_name, created_at, is_approved) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        userData.phone,
+        userData.full_name,
+        'member',
+        userData.business_category,
+        userData.business_name,
+        new Date(),
+        0 // کاربر جدید نیاز به تأیید دارد
+      ]
+    );
+    
+    if (result.insertId) {
+      return result.insertId.toString();
+    }
+    
+    return null;
   } catch (error) {
     console.error('خطا در ثبت‌نام کاربر:', error);
     return null;
@@ -187,16 +238,7 @@ export async function registerUser(userData: {
  */
 export async function deleteUser(userId: string): Promise<boolean> {
   try {
-    const { error } = await supabase
-      .from('users')
-      .delete()
-      .eq('id', userId);
-    
-    if (error) {
-      console.error('خطا در حذف کاربر:', error);
-      return false;
-    }
-    
+    await query('DELETE FROM users WHERE id = ?', [userId]);
     return true;
   } catch (error) {
     console.error('خطا در حذف کاربر:', error);
@@ -216,17 +258,8 @@ export async function deleteUser(userId: string): Promise<boolean> {
  */
 export async function userExistsByPhone(phone: string): Promise<boolean> {
   try {
-    const { data, error, count } = await supabase
-      .from('users')
-      .select('*', { count: 'exact' })
-      .eq('phone', phone);
-    
-    if (error) {
-      console.error('خطا در بررسی وجود کاربر:', error);
-      return false;
-    }
-    
-    return (count || 0) > 0;
+    const results = await query('SELECT COUNT(*) as count FROM users WHERE phone = ?', [phone]);
+    return results[0].count > 0;
   } catch (error) {
     console.error('خطا در بررسی وجود کاربر:', error);
     return false;
@@ -245,18 +278,20 @@ export async function userExistsByPhone(phone: string): Promise<boolean> {
  */
 export async function getUserByPhone(phone: string): Promise<User | null> {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('phone', phone)
-      .single();
+    const results = await query('SELECT * FROM users WHERE phone = ?', [phone]);
     
-    if (error) {
-      console.error('خطا در دریافت کاربر با شماره موبایل:', error);
+    if (results.length === 0) {
       return null;
     }
     
-    return data as User;
+    const user = results[0];
+    
+    // تبدیل فیلدهای بولین و JSON
+    return {
+      ...user,
+      is_approved: user.is_approved === 1,
+      privacy_settings: user.privacy_settings ? JSON.parse(user.privacy_settings) : null
+    };
   } catch (error) {
     console.error('خطا در دریافت کاربر با شماره موبایل:', error);
     return null;
