@@ -4,10 +4,10 @@
  * این ماژول توابع مربوط به احراز هویت کاربران را پیاده‌سازی می‌کند
  * شامل ارسال کد تأیید، بررسی کد، ورود و خروج کاربران
  */
-import { supabase } from './supabase';
 import { sendVerificationCode } from './sms';
 import { useAuthStore } from '../store/auth';
 import { User } from '../types';
+import { query, transaction } from './mysql';
 
 /**
  * تولید کد تصادفی 4 رقمی
@@ -37,23 +37,23 @@ export async function sendOTP(phone: string): Promise<boolean> {
     
     // در محیط واقعی: ذخیره کد در دیتابیس
     if (import.meta.env.PROD) {
-      const { data, error } = await supabase.rpc('create_verification_code', {
-        phone_number: phone,
-        code: code
-      });
+      // حذف کدهای قبلی
+      await query('DELETE FROM verification_codes WHERE phone = ?', [phone]);
       
-      if (error) {
-        console.error('خطا در ذخیره کد تأیید:', error);
-        return false;
-      }
+      // تنظیم زمان انقضا (5 دقیقه)
+      const expiresAt = new Date();
+      expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+      
+      // ذخیره کد جدید
+      await query(
+        'INSERT INTO verification_codes (phone, code, expires_at) VALUES (?, ?, ?)',
+        [phone, code, expiresAt]
+      );
     } else {
       // در محیط توسعه: ذخیره کد در حافظه موقت
       verificationCodes.set(phone, code);
     }
     
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 5); // انقضا بعد از 5 دقیقه
-
     // ارسال پیامک
     // در محیط واقعی از سرویس پیامک استفاده می‌شود
     // در محیط توسعه فقط در کنسول نمایش می‌دهیم
@@ -89,17 +89,24 @@ export async function verifyOTP(phone: string, code: string): Promise<boolean> {
   try {
     // در محیط واقعی: بررسی کد در دیتابیس
     if (import.meta.env.PROD) {
-      const { data, error } = await supabase.rpc('verify_code', {
-        phone_number: phone,
-        input_code: code
-      });
+      const now = new Date();
       
-      if (error) {
-        console.error('خطا در تأیید کد:', error);
+      const results = await query(
+        'SELECT * FROM verification_codes WHERE phone = ? AND code = ? AND expires_at > ? AND is_used = 0',
+        [phone, code, now]
+      );
+      
+      if (results.length === 0) {
         return false;
       }
       
-      return !!data;
+      // علامت‌گذاری کد به عنوان استفاده شده
+      await query(
+        'UPDATE verification_codes SET is_used = 1 WHERE id = ?',
+        [results[0].id]
+      );
+      
+      return true;
     } else {
       // در محیط توسعه: بررسی کد در حافظه موقت
       const storedCode = verificationCodes.get(phone);
@@ -133,30 +140,31 @@ export async function loginUser(phone: string): Promise<boolean> {
     // در محیط واقعی: دریافت اطلاعات کاربر از دیتابیس
     if (import.meta.env.PROD) {
       // دریافت اطلاعات کاربر
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('phone', phone)
-        .single();
+      const users = await query(
+        'SELECT * FROM users WHERE phone = ?',
+        [phone]
+      );
       
-      if (userError) {
-        console.error('خطا در دریافت اطلاعات کاربر:', userError);
+      if (users.length === 0) {
+        console.error('کاربر یافت نشد');
         return false;
       }
       
+      const userData = users[0];
+      
       // اگر کاربر کاندیدا است، اطلاعات کاندیدا را هم دریافت کنیم
       if (userData.role === 'candidate') {
-        const { data: candidateData, error: candidateError } = await supabase
-          .from('candidates')
-          .select('*')
-          .eq('user_id', userData.id)
-          .single();
+        const candidates = await query(
+          'SELECT * FROM candidates WHERE user_id = ?',
+          [userData.id]
+        );
         
-        if (!candidateError && candidateData) {
+        if (candidates.length > 0) {
+          const candidateData = candidates[0];
           userData.bio = candidateData.bio;
-          userData.proposals = candidateData.proposals;
+          userData.proposals = JSON.parse(candidateData.proposals || '[]');
           userData.avatar_url = candidateData.avatar_url;
-          userData.approved = candidateData.approved;
+          userData.approved = candidateData.approved === 1;
         }
       }
       
@@ -216,47 +224,21 @@ export async function loginUser(phone: string): Promise<boolean> {
  */
 export async function checkExistingSession(): Promise<boolean> {
   try {
-    // در محیط واقعی: بررسی نشست Supabase
-    if (import.meta.env.PROD) {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
-      if (error || !session) {
-        return false;
-      }
-      
-      // دریافت اطلاعات کاربر
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-      
-      if (userError || !userData) {
-        return false;
-      }
-      
-      // ذخیره اطلاعات کاربر در استور
-      const { setUser } = useAuthStore.getState();
-      setUser(userData as User);
-      
-      return true;
-    } else {
-      // در محیط توسعه: بررسی وجود نشست در localStorage
-      const storedUser = localStorage.getItem('auth-storage');
-      if (storedUser) {
-        try {
-          const parsedData = JSON.parse(storedUser);
-          if (parsedData.state && parsedData.state.user) {
-            const { setUser } = useAuthStore.getState();
-            setUser(parsedData.state.user);
-            return true;
-          }
-        } catch (parseError) {
-          console.error('خطا در پارس کردن داده‌های ذخیره شده:', parseError);
+    // در محیط توسعه: بررسی وجود نشست در localStorage
+    const storedUser = localStorage.getItem('auth-storage');
+    if (storedUser) {
+      try {
+        const parsedData = JSON.parse(storedUser);
+        if (parsedData.state && parsedData.state.user) {
+          const { setUser } = useAuthStore.getState();
+          setUser(parsedData.state.user);
+          return true;
         }
+      } catch (parseError) {
+        console.error('خطا در پارس کردن داده‌های ذخیره شده:', parseError);
       }
-      return false;
     }
+    return false;
   } catch (error) {
     console.error('خطا در بررسی نشست:', error);
     return false;
@@ -274,16 +256,6 @@ export async function checkExistingSession(): Promise<boolean> {
  */
 export async function logoutUser(): Promise<boolean> {
   try {
-    // در محیط واقعی: خروج از Supabase
-    if (import.meta.env.PROD) {
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        console.error('خطا در خروج از سیستم:', error);
-        return false;
-      }
-    }
-    
     // پاکسازی استور
     const { setUser } = useAuthStore.getState();
     setUser(null);
