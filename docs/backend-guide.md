@@ -1,239 +1,423 @@
-# راهنمای توسعه بک‌اند سامانه انتخابات الکترونیک
-
-این راهنما برای توسعه‌دهندگان بک‌اند سامانه انتخابات الکترونیک اتحادیه‌های صنفی تهیه شده است. در این راهنما، ساختار بانک اطلاعاتی، API‌ها و نحوه پیاده‌سازی آن‌ها توضیح داده شده است.
+# راهنمای پیاده‌سازی بک‌اند سامانه انتخابات الکترونیک
 
 ## فهرست مطالب
 
 1. [معماری سیستم](#معماری-سیستم)
-2. [ساختار بانک اطلاعاتی](#ساختار-بانک-اطلاعاتی)
-3. [API‌ها](#apiها)
-4. [احراز هویت](#احراز-هویت)
+2. [نیازمندی‌ها](#نیازمندی‌ها)
+3. [ساختار دیتابیس](#ساختار-دیتابیس)
+4. [API‌ها](#apiها)
 5. [امنیت](#امنیت)
-6. [توابع سمت سرور](#توابع-سمت-سرور)
-7. [نکات پیاده‌سازی](#نکات-پیاده‌سازی)
+6. [راه‌اندازی](#راه‌اندازی)
+7. [تست و استقرار](#تست-و-استقرار)
 
 ## معماری سیستم
 
 سامانه انتخابات الکترونیک از معماری سه لایه استفاده می‌کند:
 
-1. **لایه ارائه (Frontend)**: پیاده‌سازی شده با React و TypeScript
-2. **لایه منطق کسب و کار (Backend)**: پیاده‌سازی شده با Supabase Functions و PostgreSQL
-3. **لایه داده (Database)**: پیاده‌سازی شده با PostgreSQL در Supabase
+1. **لایه ارائه (Frontend)**: React + TypeScript
+2. **لایه منطق کسب و کار (Backend)**: Node.js + Express + MySQL
+3. **لایه داده (Database)**: MySQL
 
-ارتباط بین لایه‌ها از طریق API‌های RESTful و توابع سمت سرور (RPC) انجام می‌شود.
+### نمودار معماری
 
-## ساختار بانک اطلاعاتی
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Frontend  │     │   Backend   │     │  Database   │
+│   (React)   │ ──> │  (Node.js)  │ ──> │   (MySQL)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
 
-بانک اطلاعاتی سامانه شامل جداول زیر است:
+## نیازمندی‌ها
+
+### نیازمندی‌های سیستمی
+
+- Node.js 18+
+- MySQL 8+
+- Redis (برای مدیریت نشست‌ها)
+- SMTP Server (برای ارسال ایمیل)
+- SMS Gateway (برای ارسال پیامک)
+
+### وابستگی‌های اصلی
+
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2",
+    "mysql2": "^3.6.5",
+    "redis": "^4.6.11",
+    "jsonwebtoken": "^9.0.2",
+    "bcrypt": "^5.1.1",
+    "nodemailer": "^6.9.7",
+    "winston": "^3.11.0",
+    "joi": "^17.11.0"
+  }
+}
+```
+
+## ساختار دیتابیس
 
 ### جداول اصلی
 
 1. **users**: اطلاعات کاربران
+   - `id`: شناسه یکتا (UUID)
+   - `phone`: شماره موبایل (یکتا)
+   - `full_name`: نام و نام خانوادگی
+   - `role`: نقش (admin/candidate/member)
+   - `business_category`: رسته صنفی
+   - `business_name`: نام کسب و کار
+   - `created_at`: تاریخ ایجاد
+   - `is_approved`: وضعیت تأیید
+   - `privacy_settings`: تنظیمات حریم خصوصی (JSON)
+
 2. **candidates**: اطلاعات کاندیداها
+   - `user_id`: شناسه کاربر
+   - `bio`: بیوگرافی
+   - `proposals`: برنامه‌ها (JSON)
+   - `avatar_url`: آدرس تصویر
+   - `approved`: وضعیت تأیید
+   - `created_at`: تاریخ ایجاد
+
 3. **votes**: آرای ثبت شده
-4. **verification_codes**: کدهای تأیید ارسال شده
-5. **chat_rooms**: اتاق‌های چت
-6. **chat_messages**: پیام‌های چت
-7. **chat_participants**: شرکت‌کنندگان در چت
-8. **candidate_media**: رسانه‌های کاندیداها
-9. **surveys**: نظرسنجی‌ها
-10. **expectations**: انتظارات اعضا
-11. **webinars**: وبینارها
-12. **webinar_participants**: شرکت‌کنندگان وبینارها
-13. **business_categories**: رسته‌های صنفی
+   - `id`: شناسه یکتا
+   - `voter_id`: شناسه رأی‌دهنده
+   - `candidate_id`: شناسه کاندیدا
+   - `created_at`: تاریخ ثبت
+
+4. **verification_codes**: کدهای تأیید
+   - `id`: شناسه یکتا
+   - `phone`: شماره موبایل
+   - `code`: کد تأیید
+   - `created_at`: تاریخ ایجاد
+   - `expires_at`: تاریخ انقضا
+   - `is_used`: وضعیت استفاده
 
 ### روابط بین جداول
 
-- هر کاربر می‌تواند یک کاندیدا باشد (رابطه یک به یک)
-- هر کاربر می‌تواند یک رأی داشته باشد (رابطه یک به یک)
-- هر کاندیدا می‌تواند چندین رسانه داشته باشد (رابطه یک به چند)
-- هر کاندیدا می‌تواند چندین وبینار داشته باشد (رابطه یک به چند)
-- هر کاربر می‌تواند در چندین اتاق چت شرکت کند (رابطه چند به چند)
-- هر کاربر می‌تواند در چندین وبینار شرکت کند (رابطه چند به چند)
+```mermaid
+erDiagram
+    users ||--o{ candidates : has
+    users ||--o{ votes : casts
+    candidates ||--o{ votes : receives
+    users ||--o{ verification_codes : verifies
+```
 
 ## API‌ها
 
-API‌های سامانه در فایل `src/lib/api.ts` پیاده‌سازی شده‌اند. این API‌ها به صورت ماژول‌های مختلف دسته‌بندی شده‌اند:
+### احراز هویت
 
-### usersApi
+```typescript
+// ارسال کد تأیید
+POST /api/auth/send-otp
+{
+  phone: string
+}
 
-API‌های مربوط به کاربران:
+// تأیید کد
+POST /api/auth/verify-otp
+{
+  phone: string,
+  code: string
+}
 
-- `getUsers`: دریافت لیست کاربران
-- `getUser`: دریافت اطلاعات یک کاربر
-- `updateUser`: بروزرسانی اطلاعات کاربر
-- `approveUser`: تأیید کاربر
-- `registerUser`: ثبت‌نام کاربر جدید
+// ورود
+POST /api/auth/login
+{
+  phone: string
+}
 
-### candidatesApi
+// خروج
+POST /api/auth/logout
+```
 
-API‌های مربوط به کاندیداها:
+### کاربران
 
-- `getCandidates`: دریافت لیست کاندیداها
-- `getCandidate`: دریافت اطلاعات یک کاندیدا
-- `registerCandidate`: ثبت کاندیدا
-- `approveCandidate`: تأیید کاندیدا
-- `getCandidateMedia`: دریافت رسانه‌های کاندیدا
-- `addCandidateMedia`: افزودن رسانه برای کاندیدا
+```typescript
+// دریافت لیست کاربران
+GET /api/users
 
-### votesApi
+// دریافت اطلاعات کاربر
+GET /api/users/:id
 
-API‌های مربوط به رأی‌گیری:
+// ثبت‌نام کاربر جدید
+POST /api/users
+{
+  phone: string,
+  full_name: string,
+  business_category: string,
+  business_name: string
+}
 
-- `castVote`: ثبت رأی
-- `getResults`: دریافت نتایج رأی‌گیری
-- `getUserVote`: بررسی رأی کاربر
+// بروزرسانی اطلاعات کاربر
+PUT /api/users/:id
+{
+  full_name?: string,
+  business_category?: string,
+  business_name?: string,
+  privacy_settings?: object
+}
 
-### surveysApi
+// تأیید کاربر
+POST /api/users/:id/approve
+```
 
-API‌های مربوط به نظرسنجی‌ها:
+### کاندیداها
 
-- `getSurveys`: دریافت لیست نظرسنجی‌ها
-- `createSurvey`: ایجاد نظرسنجی جدید
-- `voteInSurvey`: ثبت رأی در نظرسنجی
+```typescript
+// دریافت لیست کاندیداها
+GET /api/candidates
 
-### expectationsApi
+// دریافت اطلاعات کاندیدا
+GET /api/candidates/:id
 
-API‌های مربوط به انتظارات:
+// ثبت کاندیدا
+POST /api/candidates
+{
+  user_id: string,
+  bio: string,
+  proposals: string[]
+}
 
-- `getExpectations`: دریافت لیست انتظارات
-- `createExpectation`: ایجاد انتظار جدید
-- `addCandidateResponse`: افزودن پاسخ کاندیدا به انتظار
+// تأیید کاندیدا
+POST /api/candidates/:id/approve
+```
 
-### chatApi
+### رأی‌گیری
 
-API‌های مربوط به چت و پیام‌رسانی:
+```typescript
+// ثبت رأی
+POST /api/votes
+{
+  candidate_id: string
+}
 
-- `getChatRooms`: دریافت لیست اتاق‌های چت
-- `createChatRoom`: ایجاد اتاق چت جدید
-- `getChatMessages`: دریافت پیام‌های یک اتاق چت
-- `sendMessage`: ارسال پیام در اتاق چت
-- `joinChatRoom`: پیوستن به اتاق چت
-- `deleteMessage`: حذف پیام
+// دریافت نتایج
+GET /api/votes/results
 
-### webinarsApi
-
-API‌های مربوط به وبینارها:
-
-- `getWebinars`: دریافت لیست وبینارها
-- `createWebinar`: ایجاد وبینار جدید
-- `registerForWebinar`: ثبت‌نام در وبینار
-
-## احراز هویت
-
-سیستم احراز هویت سامانه در فایل `src/lib/auth.ts` پیاده‌سازی شده است. این سیستم از احراز هویت مبتنی بر OTP (رمز یکبار مصرف) استفاده می‌کند:
-
-1. کاربر شماره موبایل خود را وارد می‌کند
-2. سیستم یک کد تأیید به شماره موبایل کاربر ارسال می‌کند
-3. کاربر کد دریافتی را وارد می‌کند
-4. سیستم کد را بررسی می‌کند و در صورت صحت، کاربر را وارد سیستم می‌کند
-
-توابع اصلی احراز هویت:
-
-- `sendOTP`: ارسال کد تأیید
-- `verifyOTP`: تأیید کد وارد شده
-- `loginUser`: ورود کاربر به سیستم
-- `checkExistingSession`: بررسی وجود نشست فعال
-- `logoutUser`: خروج کاربر از سیستم
+// بررسی رأی کاربر
+GET /api/votes/user/:id
+```
 
 ## امنیت
 
-سامانه از چندین لایه امنیتی استفاده می‌کند:
+### احراز هویت
 
-1. **Row Level Security (RLS)**: کنترل دسترسی در سطح ردیف‌های جداول
-2. **توابع SECURITY DEFINER**: اجرای توابع با سطح دسترسی بالاتر
-3. **احراز هویت دو مرحله‌ای**: استفاده از OTP برای تأیید هویت
-4. **توکن‌های JWT**: استفاده از توکن‌های JWT برای احراز هویت API
-5. **سیاست‌های دسترسی**: تعریف سیاست‌های دسترسی برای هر جدول
+1. **احراز هویت دو مرحله‌ای**
+   - ارسال کد تأیید به شماره موبایل
+   - تأیید کد و ایجاد توکن JWT
 
-## توابع سمت سرور
+2. **مدیریت نشست‌ها**
+   - استفاده از Redis برای ذخیره نشست‌ها
+   - انقضای خودکار نشست‌های غیرفعال
 
-توابع سمت سرور (RPC) در فایل‌های مهاجرت Supabase پیاده‌سازی شده‌اند. این توابع امکان اجرای منطق پیچیده در سمت سرور را فراهم می‌کنند:
+3. **کنترل دسترسی**
+   - بررسی نقش کاربر در هر درخواست
+   - محدودیت دسترسی به API‌ها
 
-### توابع احراز هویت
+### رمزنگاری
 
-- `create_verification_code`: ایجاد کد تأیید
-- `verify_code`: تأیید کد
-- `register_user`: ثبت‌نام کاربر
+1. **توکن‌های JWT**
+   ```typescript
+   import jwt from 'jsonwebtoken';
+   
+   const generateToken = (userId: string): string => {
+     return jwt.sign({ userId }, process.env.JWT_SECRET!, {
+       expiresIn: '24h'
+     });
+   };
+   ```
 
-### توابع کاندیداها
+2. **رمزنگاری کدهای تأیید**
+   ```typescript
+   import bcrypt from 'bcrypt';
+   
+   const hashCode = async (code: string): Promise<string> => {
+     const salt = await bcrypt.genSalt(10);
+     return bcrypt.hash(code, salt);
+   };
+   ```
 
-- `register_candidate`: ثبت کاندیدا
-- `approve_candidate`: تأیید کاندیدا
-
-### توابع رأی‌گیری
-
-- `cast_vote`: ثبت رأی
-- `get_vote_results`: دریافت نتایج رأی‌گیری
-- `has_user_voted`: بررسی وجود رأی کاربر
-
-### توابع چت
-
-- `create_chat_room`: ایجاد اتاق چت
-- `send_message`: ارسال پیام
-
-### توابع نظرسنجی
-
-- `vote_in_survey`: ثبت رأی در نظرسنجی
-
-### توابع انتظارات
-
-- `add_candidate_response`: افزودن پاسخ کاندیدا به انتظار
-- `add_expectation_comment`: افزودن نظر به انتظار
-- `react_to_expectation`: واکنش به انتظار
-
-### توابع رسانه
-
-- `add_media_comment`: افزودن نظر به رسانه کاندیدا
-- `react_to_media`: واکنش به رسانه
-
-## نکات پیاده‌سازی
-
-### 1. مدیریت خطاها
-
-در پیاده‌سازی API‌ها، از الگوی try-catch برای مدیریت خطاها استفاده شده است. در صورت بروز خطا، پیام مناسب به کاربر نمایش داده می‌شود.
-
-### 2. محیط توسعه و تولید
-
-سامانه از متغیر `import.meta.env.PROD` برای تشخیص محیط اجرا استفاده می‌کند:
+### میان‌افزارهای امنیتی
 
 ```typescript
-if (import.meta.env.PROD) {
-  // کد مربوط به محیط تولید
-} else {
-  // کد مربوط به محیط توسعه
-}
+// بررسی توکن
+const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'توکن یافت نشد' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: 'توکن نامعتبر است' });
+  }
+};
+
+// بررسی نقش
+const roleMiddleware = (roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'دسترسی غیرمجاز' });
+    }
+    next();
+  };
+};
 ```
 
-### 3. لاگ کردن
+## راه‌اندازی
 
-برای لاگ کردن خطاها و اطلاعات مفید، از `console.error` و `console.log` استفاده شده است. در محیط تولید، می‌توان از سرویس‌های لاگ پیشرفته‌تر استفاده کرد.
+1. **نصب وابستگی‌ها**
+   ```bash
+   npm install
+   ```
 
-### 4. کش کردن
+2. **تنظیم متغیرهای محیطی**
+   ```env
+   # دیتابیس
+   MYSQL_HOST=localhost
+   MYSQL_USER=root
+   MYSQL_PASSWORD=
+   MYSQL_DATABASE=election_system
 
-برای بهبود کارایی، می‌توان از کش کردن داده‌ها در سمت کلاینت استفاده کرد. این کار می‌تواند با استفاده از `localStorage` یا کتابخانه‌های کش مانند `react-query` انجام شود.
+   # Redis
+   REDIS_URL=redis://localhost:6379
 
-### 5. پیاده‌سازی Realtime
+   # JWT
+   JWT_SECRET=your-secret-key
 
-برای پیاده‌سازی قابلیت‌های realtime مانند چت، می‌توان از قابلیت‌های realtime Supabase استفاده کرد:
+   # SMS
+   SMS_API_KEY=your-api-key
+   SMS_SENDER=your-sender-number
 
-```typescript
-const subscription = supabase
-  .from('chat_messages')
-  .on('INSERT', (payload) => {
-    // پردازش پیام جدید
-  })
-  .subscribe();
-```
+   # ایمیل
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email
+   SMTP_PASS=your-password
+   ```
 
-### 6. مدیریت وضعیت
+3. **اجرای مهاجرت‌ها**
+   ```bash
+   npm run migrate
+   ```
 
-برای مدیریت وضعیت سمت کلاینت، از کتابخانه Zustand استفاده شده است. استورهای اصلی عبارتند از:
+4. **راه‌اندازی سرور**
+   ```bash
+   npm run dev   # محیط توسعه
+   npm run prod  # محیط تولید
+   ```
 
-- `useAuthStore`: مدیریت وضعیت احراز هویت
-- `useVoteStore`: مدیریت وضعیت رأی‌گیری
-- `useThemeStore`: مدیریت وضعیت تم
+## تست و استقرار
 
-## نتیجه‌گیری
+### تست‌ها
 
-این راهنما، مروری کلی بر ساختار بک‌اند سامانه انتخابات الکترونیک ارائه می‌دهد. برای اطلاعات بیشتر، به کد منبع و مستندات API مراجعه کنید.
+1. **تست‌های واحد**
+   ```typescript
+   // __tests__/auth.test.ts
+   describe('Authentication', () => {
+     test('should send OTP', async () => {
+       const res = await request(app)
+         .post('/api/auth/send-otp')
+         .send({ phone: '09123456789' });
+       
+       expect(res.status).toBe(200);
+     });
+   });
+   ```
+
+2. **تست‌های یکپارچگی**
+   ```typescript
+   // __tests__/integration/voting.test.ts
+   describe('Voting Flow', () => {
+     test('should complete voting process', async () => {
+       // ورود کاربر
+       const loginRes = await login('09123456789');
+       expect(loginRes.status).toBe(200);
+       
+       // ثبت رأی
+       const voteRes = await vote(loginRes.token, 'candidate-1');
+       expect(voteRes.status).toBe(200);
+     });
+   });
+   ```
+
+### استقرار
+
+1. **آماده‌سازی سرور**
+   ```bash
+   # نصب Node.js
+   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+
+   # نصب MySQL
+   sudo apt-get install mysql-server
+
+   # نصب Redis
+   sudo apt-get install redis-server
+   ```
+
+2. **تنظیم Nginx**
+   ```nginx
+   server {
+     listen 80;
+     server_name election.example.com;
+
+     location / {
+       proxy_pass http://localhost:3000;
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection 'upgrade';
+       proxy_set_header Host $host;
+       proxy_cache_bypass $http_upgrade;
+     }
+   }
+   ```
+
+3. **راه‌اندازی با PM2**
+   ```bash
+   # نصب PM2
+   npm install -g pm2
+
+   # راه‌اندازی برنامه
+   pm2 start npm --name "election-system" -- run prod
+
+   # تنظیم راه‌اندازی خودکار
+   pm2 startup
+   pm2 save
+   ```
+
+## نکات مهم
+
+1. **مدیریت خطاها**
+   - استفاده از میان‌افزار خطایابی
+   - لاگ کردن خطاها
+   - ارسال پاسخ‌های مناسب به کاربر
+
+2. **کش کردن**
+   - استفاده از Redis برای کش کردن داده‌های پرکاربرد
+   - کش کردن نتایج رأی‌گیری
+   - کش کردن اطلاعات کاندیداها
+
+3. **مانیتورینگ**
+   - استفاده از Winston برای لاگ کردن
+   - مانیتورینگ وضعیت سرور
+   - هشدار در صورت بروز مشکل
+
+4. **بهینه‌سازی**
+   - ایندکس‌گذاری مناسب در دیتابیس
+   - استفاده از Connection Pool
+   - کش کردن نتایج پرکاربرد
+
+5. **امنیت**
+   - محدودیت تعداد درخواست
+   - فیلتر کردن ورودی‌ها
+   - اعتبارسنجی داده‌ها
+
+## پشتیبانی
+
+برای پشتیبانی و راهنمایی بیشتر:
+- ایمیل: support@example.com
+- تلفن: 021-12345678
+- مستندات API: https://api.election.example.com/docs
